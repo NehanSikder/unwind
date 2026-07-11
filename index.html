@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Unwind — a quiet minute to ease out of an anxious spiral: follow the light, breathe, and let it settle.">
+<meta name="theme-color" content="#0A0C13">
+<title>Unwind</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --void:#0A0C13;
+    --void-2:#10131F;
+    --ink:#EAEEF7;
+    --muted:#7C86A0;
+    --line:rgba(255,255,255,.10);
+    --line-strong:rgba(255,255,255,.18);
+    --glow-a:#63E6D0;   /* teal — calm start */
+    --glow-b:#A98BFF;   /* violet — momentum peak */
+    --flash:#EAFFFB;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono: ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;
+    background:var(--void);
+    color:var(--ink);
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior:none;
+  }
+
+  .app{
+    position:fixed;
+    inset:0;
+    overflow:hidden;
+    touch-action:none;               /* let us own the pointer gestures */
+    background:
+      radial-gradient(120% 90% at 50% 8%, #141a2b 0%, var(--void-2) 42%, var(--void) 100%);
+  }
+
+  canvas#stage{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    display:block;
+  }
+  /* hide the OS cursor over the field on pointer-capable devices; we draw our own */
+  .app.pursuing canvas#stage{cursor:none}
+
+  /* ---- instrument chrome ---- */
+  .topbar{
+    position:absolute;
+    top:0;left:0;right:0;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:16px 18px;
+    z-index:5;
+    pointer-events:none;
+  }
+  .brand{
+    display:flex;flex-direction:column;gap:2px;
+    pointer-events:none;
+  }
+  .brand b{
+    font-weight:600;font-size:13px;letter-spacing:.02em;
+  }
+  .brand span{
+    font-family:var(--mono);
+    font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);
+  }
+
+  .rail{
+    display:flex;align-items:center;gap:0;
+    font-family:var(--mono);
+    font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--muted);
+    pointer-events:none;
+  }
+  .rail .step{
+    padding:5px 9px;
+    border-radius:999px;
+    transition:color .35s ease, background .35s ease, opacity .35s;
+    opacity:.5;
+    white-space:nowrap;
+  }
+  .rail .step.on{
+    color:var(--void);
+    background:var(--glow-a);
+    opacity:1;
+  }
+  .rail .sep{opacity:.3;padding:0 1px}
+
+  .skip{
+    pointer-events:auto;
+    font-family:var(--mono);
+    font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);
+    background:transparent;
+    border:1px solid var(--line);
+    border-radius:999px;
+    padding:6px 11px;
+    cursor:pointer;
+    transition:border-color .2s,color .2s;
+  }
+  .skip:hover,.skip:focus-visible{color:var(--ink);border-color:var(--line-strong)}
+
+  /* momentum readout, bottom-left instrument */
+  .readout{
+    position:absolute;
+    left:18px;bottom:18px;
+    z-index:5;
+    font-family:var(--mono);
+    font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--muted);
+    display:flex;align-items:center;gap:10px;
+    opacity:0;transition:opacity .4s;
+    pointer-events:none;
+  }
+  .readout.show{opacity:1}
+  .meter{
+    width:96px;height:4px;border-radius:999px;
+    background:var(--line);overflow:hidden;
+  }
+  .meter i{
+    display:block;height:100%;width:0%;
+    background:linear-gradient(90deg,var(--glow-a),var(--glow-b));
+    border-radius:999px;transition:width .12s linear;
+  }
+  .readout b{color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
+
+  /* ---- centered hint (calming, in-experience voice) ---- */
+  .hint{
+    position:absolute;
+    left:50%;bottom:12%;
+    transform:translateX(-50%);
+    z-index:4;
+    text-align:center;
+    font-size:15px;
+    color:var(--ink);
+    opacity:0;
+    transition:opacity .5s ease;
+    pointer-events:none;
+    text-shadow:0 1px 20px rgba(0,0,0,.6);
+    max-width:min(80vw,420px);
+    text-wrap:balance;
+  }
+  .hint.show{opacity:.92}
+  .hint.faint{opacity:.5}
+
+  /* ---- overlays (intro + pulse check) ---- */
+  .overlay{
+    position:absolute;inset:0;z-index:10;
+    display:grid;place-items:center;
+    padding:24px;
+    background:radial-gradient(90% 70% at 50% 45%, rgba(10,12,19,.72), rgba(10,12,19,.94));
+    backdrop-filter:blur(3px);
+    transition:opacity .5s ease;
+  }
+  /* bridge sits lightly over the settled dot so you still see it */
+  .overlay.soft{
+    background:radial-gradient(90% 70% at 50% 46%, rgba(10,12,19,.50), rgba(10,12,19,.80));
+    backdrop-filter:blur(1.5px);
+  }
+  .overlay[hidden]{display:none}
+  .overlay.leaving{opacity:0;pointer-events:none}
+
+  .card{
+    width:min(94vw,440px);
+    text-align:center;
+    display:flex;flex-direction:column;align-items:center;gap:0;
+  }
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:10px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--glow-a);
+    margin-bottom:18px;
+  }
+  .card h1{
+    margin:0;
+    font-size:clamp(26px,7vw,38px);
+    font-weight:600;
+    letter-spacing:-.02em;
+    line-height:1.05;
+    text-wrap:balance;
+  }
+  .card p{
+    margin:14px 0 0;
+    color:var(--muted);
+    font-size:14.5px;
+    line-height:1.55;
+    max-width:34ch;
+  }
+  .card p strong{color:var(--ink);font-weight:500}
+
+  .begin{
+    margin-top:26px;
+    font-family:var(--sans);
+    font-size:15px;font-weight:600;
+    color:var(--void);
+    background:var(--glow-a);
+    border:0;border-radius:999px;
+    padding:14px 30px;
+    cursor:pointer;
+    transition:transform .15s ease, box-shadow .3s ease;
+    box-shadow:0 0 0 0 rgba(99,230,208,.5);
+  }
+  .begin:hover{transform:translateY(-1px)}
+  .begin:focus-visible{outline:none;box-shadow:0 0 0 4px rgba(99,230,208,.28)}
+  .begin.pulse{animation:beat 2.6s ease-in-out infinite}
+  @keyframes beat{
+    0%,100%{box-shadow:0 0 0 0 rgba(99,230,208,.0)}
+    50%{box-shadow:0 0 0 10px rgba(99,230,208,.10)}
+  }
+  .fineprint{
+    margin-top:16px;
+    font-family:var(--mono);
+    font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--muted);opacity:.7;
+  }
+
+  /* ---- pulse check ---- */
+  .pulse-title{font-size:clamp(22px,6vw,30px);font-weight:600;letter-spacing:-.02em;margin:0}
+  .pulse-sub{color:var(--muted);font-size:14px;margin:10px 0 22px;max-width:36ch;line-height:1.5}
+  .stages{
+    display:grid;grid-template-columns:repeat(2,1fr);gap:10px;width:100%;
+  }
+  .stage-btn{
+    text-align:left;
+    background:var(--void-2);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:13px 14px;
+    cursor:pointer;
+    color:var(--ink);
+    transition:border-color .2s, background .2s, transform .1s;
+    display:flex;flex-direction:column;gap:3px;
+  }
+  .stage-btn:hover{border-color:var(--line-strong)}
+  .stage-btn:focus-visible{outline:none;border-color:var(--glow-a)}
+  .stage-btn.pick{
+    border-color:var(--glow-a);
+    background:linear-gradient(180deg, rgba(99,230,208,.10), rgba(99,230,208,.03));
+  }
+  .stage-btn .k{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+  .stage-btn .n{font-size:14px;font-weight:600}
+  .stage-btn .d{font-size:12px;color:var(--muted);line-height:1.35}
+  .stage-btn.pick .k{color:var(--glow-a)}
+
+  .row{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap;justify-content:center}
+  .ghost{
+    font-family:var(--sans);font-size:13px;font-weight:500;
+    color:var(--ink);background:transparent;
+    border:1px solid var(--line-strong);border-radius:999px;
+    padding:11px 20px;cursor:pointer;transition:border-color .2s,background .2s}
+  .ghost:hover{background:rgba(255,255,255,.04)}
+  .ghost:focus-visible{outline:none;border-color:var(--glow-a)}
+  .ghost.primary{background:var(--glow-a);color:var(--void);border-color:var(--glow-a)}
+
+  .echo{
+    margin-top:16px;min-height:18px;
+    font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+    color:var(--glow-a);opacity:0;transition:opacity .3s;text-align:center}
+  .echo.show{opacity:.9}
+
+  @media (max-width:420px){
+    .rail .step{padding:5px 6px;letter-spacing:.1em}
+    .rail{font-size:9px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .begin.pulse{animation:none}
+  }
+</style>
+</head>
+<body>
+
+
+<div class="app" id="app">
+  <canvas id="stage"></canvas>
+
+  <div class="topbar">
+    <div class="brand">
+      <b>Unwind</b>
+      <span>a quiet minute</span>
+    </div>
+    <div class="rail" id="rail" aria-hidden="true">
+      <span class="step" data-k="orient">Orient</span><span class="sep">·</span>
+      <span class="step" data-k="pursue">Pursue</span><span class="sep">·</span>
+      <span class="step" data-k="flow">Flow</span><span class="sep">·</span>
+      <span class="step" data-k="breathe">Breathe</span>
+    </div>
+    <button class="skip" id="skip" hidden>Skip&nbsp;→</button>
+  </div>
+
+  <div class="readout" id="readout" aria-hidden="true">
+    <span>Momentum</span>
+    <span class="meter"><i id="meterFill"></i></span>
+    <b id="meterPct">0%</b>
+  </div>
+
+  <div class="hint" id="hint" aria-live="polite"></div>
+
+  <!-- INTRO -->
+  <div class="overlay" id="introOv">
+    <div class="card">
+      <div class="eyebrow">take a minute for yourself</div>
+      <h1>Something is about to move.</h1>
+      <p><strong>Follow the dot</strong> when it appears. Drag it on a phone, or move your mouse to chase it on a laptop. Or just track it with your eyes. That's the whole thing.</p>
+      <button class="begin pulse" id="beginBtn">Begin</button>
+      <div class="fineprint">visual only · ~1 minute</div>
+    </div>
+  </div>
+
+  <!-- BRIDGE (pause + disclaimer before the mandatory breath) -->
+  <div class="overlay" id="bridgeOv" hidden>
+    <div class="card">
+      <div class="eyebrow">nice work</div>
+      <h2 class="pulse-title">You’ve got some space now.</h2>
+      <p class="pulse-sub">Feel that bit of calm? Let’s build on it. Next, one slow minute of breathing to settle in.</p>
+      <div class="row">
+        <button class="ghost primary" id="toBreath">Take a slow minute →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ACT (behavioral activation — physical, right where you are) -->
+  <div class="overlay" id="actOv" hidden>
+    <div class="card">
+      <div class="eyebrow">optional · a little movement</div>
+      <h2 class="pulse-title">One easy movement, right where you are.</h2>
+      <p class="pulse-sub">No leaving your spot. <strong>Roll your shoulders back three times</strong>, plant both feet and press them into the floor, or reach both arms overhead and stretch tall. Pick one whenever you're ready.</p>
+      <div class="row">
+        <button class="ghost primary" id="actDone">Done, that felt better</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CLOSE (congratulate) -->
+  <div class="overlay" id="doneOv" hidden>
+    <div class="card">
+      <div class="eyebrow">well done</div>
+      <h2 class="pulse-title">You did it.</h2>
+      <p class="pulse-sub">You showed up and steadied yourself. That took something. Be proud of it, and carry this calm with you.</p>
+      <div class="row">
+        <button class="ghost primary" id="againBtn">Go again</button>
+        <button class="ghost" id="toMove">Add a small movement</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var app     = document.getElementById('app');
+  var canvas  = document.getElementById('stage');
+  var ctx     = canvas.getContext('2d');
+  var hintEl  = document.getElementById('hint');
+  var railSteps = {};
+  document.querySelectorAll('#rail .step').forEach(function(s){ railSteps[s.dataset.k]=s; });
+  var readout = document.getElementById('readout');
+  var meterFill = document.getElementById('meterFill');
+  var meterPct  = document.getElementById('meterPct');
+  var skipBtn = document.getElementById('skip');
+  var introOv = document.getElementById('introOv');
+  var bridgeOv= document.getElementById('bridgeOv');
+  var actOv   = document.getElementById('actOv');
+  var doneOv  = document.getElementById('doneOv');
+  var pointerIsMouse = window.matchMedia('(pointer:fine)').matches;
+
+  var reduce = window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+
+  // ---- viewport / DPR ----
+  var W=0,H=0,DPR=1,MIN=0;
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio||1, 2);
+    W = app.clientWidth; H = app.clientHeight; MIN = Math.min(W,H);
+    canvas.width = Math.round(W*DPR); canvas.height = Math.round(H*DPR);
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---- pointer ----
+  var ptr = { x:W/2, y:H/2, active:false, everMoved:false, lastMove:0 };
+  function setPtr(e){
+    var r = canvas.getBoundingClientRect();
+    ptr.x = e.clientX - r.left;
+    ptr.y = e.clientY - r.top;
+    ptr.active = true; ptr.everMoved = true; ptr.lastMove = now();
+    if(e.pointerType==='mouse' || e.pointerType==='pen') pointerIsMouse=true;
+    else if(e.pointerType==='touch') pointerIsMouse=false;
+  }
+  canvas.addEventListener('pointerdown', function(e){ setPtr(e); });
+  canvas.addEventListener('pointermove', function(e){ setPtr(e); });
+  canvas.addEventListener('pointerup',   function(){ ptr.active=false; });
+  canvas.addEventListener('pointerleave',function(){ ptr.active=false; });
+
+  function now(){ return performance.now(); }
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function clamp(v,a,b){ return v<a?a:(v>b?b:v); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+  function dist(ax,ay,bx,by){ var dx=ax-bx,dy=ay-by; return Math.sqrt(dx*dx+dy*dy); }
+  function buzz(ms){ if(navigator.vibrate){ try{ navigator.vibrate(ms); }catch(e){} } }
+
+  // hex helpers for teal->violet lerp
+  var TEAL=[0x63,0xE6,0xD0], VIO=[0xA9,0x8B,0xFF];
+  function mix(t){
+    t=clamp(t,0,1);
+    return 'rgb('+Math.round(lerp(TEAL[0],VIO[0],t))+','+
+                  Math.round(lerp(TEAL[1],VIO[1],t))+','+
+                  Math.round(lerp(TEAL[2],VIO[2],t))+')';
+  }
+  function mixA(t,a){
+    t=clamp(t,0,1);
+    return 'rgba('+Math.round(lerp(TEAL[0],VIO[0],t))+','+
+                   Math.round(lerp(TEAL[1],VIO[1],t))+','+
+                   Math.round(lerp(TEAL[2],VIO[2],t))+','+a+')';
+  }
+
+  // ---- dot state ----
+  var dot = { x:W/2, y:H/2, tx:W/2, ty:H/2, r:10, vr:0 };
+  var trail = [];      // {x,y,a,t}
+  var particles = [];  // {x,y,vx,vy,life,max,c}
+
+  // ---- run state ----
+  var STAGE='intro';   // intro | orient | pursue | breathe | done
+  var stageStart=0;
+  var momentum=0;      // 0..1
+  var streak=0;        // seconds continuously connected
+  var connected=false;
+  var flowLit=false;
+  var breathCycle=0, BREATH_CYCLES=3;
+  var actStart=0;
+  var lastT=now();
+
+  var CONNECT_R = 0;   // set per resize/stage
+  // generous by default; a mouse (harder to pursue than a finger) gets extra forgiveness
+  function connectRadius(){
+    var b = clamp(MIN*0.16, 60, 190);
+    return pointerIsMouse ? b*1.3 : b;
+  }
+
+  function setStage(s){
+    STAGE=s; stageStart=now();
+    for(var k in railSteps){ railSteps[k].classList.remove('on'); }
+    if(s==='orient') railSteps.orient.classList.add('on');
+    if(s==='pursue') railSteps.pursue.classList.add('on');
+    if(s==='breathe') railSteps.breathe.classList.add('on');
+    app.classList.toggle('pursuing', s==='pursue');
+    readout.classList.toggle('show', s==='pursue');
+    skipBtn.hidden = (s==='intro' || s==='done' || s==='bridge' || s==='act');
+  }
+
+  function setHint(text, faint){
+    if(!text){ hintEl.classList.remove('show','faint'); return; }
+    hintEl.textContent=text;
+    hintEl.classList.toggle('faint', !!faint);
+    hintEl.classList.add('show');
+  }
+
+  // ---------- ORIENT ----------
+  var orientPath=[], orientIdx=0, flash=0;
+  function startOrient(){
+    setStage('orient'); setHint('');
+    momentum=0; streak=0; flowLit=false; trail.length=0; particles.length=0;
+    // enter from an unexpected edge, high speed, sharp waypoints
+    var side=Math.floor(rand(0,4));
+    var ex = side===0?-40: side===1?W+40: rand(0,W);
+    var ey = side===2?-40: side===3?H+40: rand(0,H);
+    dot.x=ex; dot.y=ey; dot.r=reduce?12:9;
+    orientPath=[];
+    var n = reduce?2:4;
+    for(var i=0;i<n;i++){
+      orientPath.push({ x:rand(W*0.2,W*0.8), y:rand(H*0.22,H*0.7) });
+    }
+    orientPath.push({ x:W/2, y:H*0.46 }); // settle toward center
+    orientIdx=0;
+    dot.tx=orientPath[0].x; dot.ty=orientPath[0].y;
+    flash = reduce?0.4:1;
+    buzz(reduce?0:18);
+  }
+
+  function updateOrient(dt){
+    flash=Math.max(0,flash-dt*1.6);
+    var speed = reduce?7:13;               // fast, snappy
+    dot.x = lerp(dot.x, dot.tx, clamp(dt*speed,0,1));
+    dot.y = lerp(dot.y, dot.ty, clamp(dt*speed,0,1));
+    if(dist(dot.x,dot.y,dot.tx,dot.ty) < MIN*0.03){
+      orientIdx++;
+      if(orientIdx>=orientPath.length){ startPursue(); return; }
+      dot.tx=orientPath[orientIdx].x; dot.ty=orientPath[orientIdx].y;
+    }
+    pushTrail(0);
+    // hard timeout
+    if(now()-stageStart > (reduce?2600:2400)) startPursue();
+  }
+
+  // ---------- PURSUE / FLOW ----------
+  var wpTimer=0;
+  function startPursue(){
+    setStage('pursue');
+    CONNECT_R = connectRadius();
+    dot.r = 14;
+    pickWaypoint();
+    setHint('Follow the dot.');
+    ptr.everMoved=false; ptr.lastMove=now();
+    setTimeout(function(){
+      if(STAGE==='pursue' && !ptr.everMoved){
+        setHint('Or just follow it with your eyes.', true);
+      }
+    }, 4200);
+  }
+  function pickWaypoint(){
+    var m = MIN*0.14;
+    dot.tx = rand(m, W-m);
+    dot.ty = rand(m+H*0.04, H-m-H*0.10);
+    wpTimer = rand(1.5,2.8);          // lingers longer — easier to stay with
+  }
+  function updatePursue(dt){
+    CONNECT_R = connectRadius();       // live (adapts to mouse vs touch)
+    // dot wanders toward waypoints; pace scales gently with momentum (flow)
+    var pace = lerp(1.4, 2.1, momentum);   // slower & calmer than v1
+    dot.x = lerp(dot.x, dot.tx, clamp(dt*pace,0,1));
+    dot.y = lerp(dot.y, dot.ty, clamp(dt*pace,0,1));
+    wpTimer -= dt;
+    if(wpTimer<=0 || dist(dot.x,dot.y,dot.tx,dot.ty)<MIN*0.05) pickWaypoint();
+
+    // connection
+    var d = dist(ptr.x,ptr.y,dot.x,dot.y);
+    var usingEyes = !ptr.everMoved || (now()-ptr.lastMove>1400);
+    connected = ptr.everMoved && ptr.active && d < CONNECT_R;
+
+    var fill;
+    if(connected){
+      streak += dt;
+      fill = dt/9;                           // ~9s of good tracking fills it (shorter)
+      spawnConnParticles(d);
+    } else if(usingEyes && !ptr.everMoved){
+      // eyes-only assist so no-input users still progress
+      streak += dt*0.6;
+      fill = dt/15;
+    } else {
+      streak = Math.max(0, streak-dt*1.2);
+      fill = -dt/46;                          // gentler decay — losing it isn't punishing
+    }
+    momentum = clamp(momentum + fill, 0, 1);
+
+    // dot color/size respond to streak (juice)
+    var glowT = clamp(streak/8,0,1);
+    dot.r = lerp(14, 20, glowT);
+
+    // flow lights up once you've held a streak
+    if(streak>3.2 && !flowLit){ flowLit=true; railSteps.flow.classList.add('on'); buzz(10);
+      setHint('Nice, stay with it.', false); }
+    if(streak<1 && flowLit){ flowLit=false; railSteps.flow.classList.remove('on'); }
+
+    // readout
+    var pct=Math.round(momentum*100);
+    meterFill.style.width=pct+'%';
+    meterPct.textContent=pct+'%';
+
+    pushTrail(glowT);
+
+    if(momentum>=1){ startBridge(); return; }
+    // safety cap so it never traps someone
+    if(now()-stageStart > 34000) startBridge();
+  }
+
+  function spawnConnParticles(d){
+    if(reduce) return;
+    if(Math.random()>0.6) return;
+    var t=clamp(streak/8,0,1);
+    var ang=rand(0,Math.PI*2), sp=rand(20,70);
+    particles.push({
+      x:dot.x, y:dot.y,
+      vx:Math.cos(ang)*sp, vy:Math.sin(ang)*sp,
+      life:0, max:rand(.5,1.0), c:t
+    });
+  }
+
+  // ---------- BRIDGE (pause + disclaimer, canvas goes quiet) ----------
+  function startBridge(){
+    setStage('bridge');
+    readout.classList.remove('show');
+    setHint('');
+    particles.length=0; trail.length=0;
+    bridgeOv.hidden=false; bridgeOv.classList.remove('leaving');
+    buzz(reduce?0:[12,40,12]);
+  }
+
+  // ---------- ACT (behavioral activation — after the mandatory breath) ----------
+  function goAct(){
+    setStage('act');
+    setHint('');
+    particles.length=0; trail.length=0;
+    actOv.hidden=false; actOv.classList.remove('leaving');
+    buzz(reduce?0:[12,40,12]);
+  }
+
+  // ---------- BREATHE ----------
+  var IN=4.0, OUT=6.0;                       // ~6 breaths/min resonance
+  function startBreathe(){
+    setStage('breathe');
+    breathCycle=0;
+    dot.x=W/2; dot.y=H*0.46;
+    particles.length=0; trail.length=0;
+    readout.classList.remove('show');
+    setHint('');
+    buzz(reduce?0:20);
+  }
+  function breathPhase(){
+    var e=(now()-stageStart)/1000;
+    var cyc=IN+OUT;
+    breathCycle=Math.floor(e/cyc);
+    var p=e - breathCycle*cyc;
+    if(p<IN){ return {inhale:true, t:p/IN}; }
+    return {inhale:false, t:(p-IN)/OUT};
+  }
+  function updateBreathe(dt){
+    if(breathCycle>=BREATH_CYCLES){ finish(); return; }
+    var ph=breathPhase();
+    var base=MIN*0.10, amp=MIN*0.11;
+    var ease = ph.inhale ? easeOutSine(ph.t) : (1-easeInSine(ph.t));
+    dot.r = base + amp*ease;
+    setHint(ph.inhale?'Breathe in through your nose':'Breathe out through your mouth', false);
+  }
+  function easeOutSine(t){ return Math.sin(t*Math.PI/2); }
+  function easeInSine(t){ return 1-Math.cos(t*Math.PI/2); }
+
+  // ---------- shared ----------
+  function pushTrail(glowT){
+    trail.push({x:dot.x,y:dot.y,c:glowT||0});
+    var max = reduce?12:28;
+    while(trail.length>max) trail.shift();
+  }
+
+  function finish(){
+    setStage('done');
+    setHint('');
+    for(var k in railSteps){ railSteps[k].classList.remove('on'); }
+    doneOv.hidden=false; doneOv.classList.remove('leaving');
+    buzz(reduce?0:[10,30,10]);
+  }
+
+  // ---------- render ----------
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+
+    // capture flash wash
+    if(flash>0){
+      ctx.fillStyle='rgba(234,255,251,'+(flash*0.10)+')';
+      ctx.fillRect(0,0,W,H);
+    }
+
+    // trail (the visual trace — kept prominent)
+    for(var i=0;i<trail.length;i++){
+      var p=trail[i], a=(i/trail.length);
+      ctx.beginPath();
+      ctx.fillStyle=mixA(p.c, a*0.36);
+      ctx.arc(p.x,p.y, lerp(2,dot.r*0.8,a), 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // particles
+    for(var j=particles.length-1;j>=0;j--){
+      var q=particles[j]; q.life+=1/60;
+      q.x+=q.vx/60; q.y+=q.vy/60; q.vx*=0.94; q.vy*=0.94;
+      var la=1-(q.life/q.max);
+      if(la<=0){ particles.splice(j,1); continue; }
+      ctx.beginPath();
+      ctx.fillStyle=mixA(q.c, la*0.5);
+      ctx.arc(q.x,q.y, 2.2*la+0.6, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // bridge & act are overlay-only — keep the canvas dark so the copy is legible
+    if(STAGE==='bridge' || STAGE==='act') return;
+
+    var calm = (STAGE==='breathe');
+    var colT = STAGE==='pursue' ? clamp(streak/8,0,1) : 0;
+
+    // connection beam avatar<->dot when close
+    if(STAGE==='pursue' && connected){
+      ctx.strokeStyle=mixA(colT,0.35);
+      ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(ptr.x,ptr.y); ctx.lineTo(dot.x,dot.y); ctx.stroke();
+    }
+
+    // the DOT with glow
+    var glowMul = STAGE==='pursue' ? 2.6 : (STAGE==='breathe' ? 1.0 : 1.6);
+    var glowR = dot.r * glowMul;
+    var g=ctx.createRadialGradient(dot.x,dot.y,0, dot.x,dot.y, Math.max(glowR,dot.r+1));
+    g.addColorStop(0, mixA(colT,0.95));
+    g.addColorStop(0.35, mixA(colT,0.45));
+    g.addColorStop(1, mixA(colT,0));
+    ctx.fillStyle=g;
+    ctx.beginPath(); ctx.arc(dot.x,dot.y, Math.max(glowR,dot.r+1),0,Math.PI*2); ctx.fill();
+
+    ctx.fillStyle=calm?'#EAFFFB':mix(colT);
+    ctx.beginPath(); ctx.arc(dot.x,dot.y, dot.r,0,Math.PI*2); ctx.fill();
+
+    // breathing ring
+    if(STAGE==='breathe'){
+      ctx.strokeStyle='rgba(99,230,208,.35)'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(dot.x,dot.y, dot.r+MIN*0.02,0,Math.PI*2); ctx.stroke();
+    }
+
+    // avatar ring (our own cursor) — hollow so finger/mouse point sits in the hole
+    if(STAGE==='pursue' && ptr.everMoved){
+      var ar=connected?18:15;
+      ctx.strokeStyle=connected?mixA(colT,0.9):'rgba(234,238,247,.55)';
+      ctx.lineWidth=connected?3:2;
+      ctx.beginPath(); ctx.arc(ptr.x,ptr.y, ar,0,Math.PI*2); ctx.stroke();
+    }
+  }
+
+  // ---------- loop ----------
+  function frame(){
+    var t=now(); var dt=Math.min((t-lastT)/1000, 0.05); lastT=t;
+    if(STAGE==='orient') updateOrient(dt);
+    else if(STAGE==='pursue') updatePursue(dt);
+    else if(STAGE==='breathe') updateBreathe(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // ---------- controls ----------
+  document.getElementById('beginBtn').addEventListener('click', function(){
+    introOv.classList.add('leaving');
+    setTimeout(function(){ introOv.hidden=true; }, 500);
+    // brief stillness, THEN the surprise onset (orienting response)
+    setStage('orient'); setHint('');
+    setTimeout(startOrient, reduce?250:650);
+  });
+
+  skipBtn.addEventListener('click', function(){
+    if(STAGE==='orient') startPursue();
+    else if(STAGE==='pursue') startBridge();
+    else if(STAGE==='breathe') finish();
+  });
+
+  function leaveOverlay(ov){
+    ov.classList.add('leaving');
+    setTimeout(function(){ ov.hidden=true; ov.classList.remove('leaving'); }, 450);
+  }
+  document.getElementById('toBreath').addEventListener('click', function(){ leaveOverlay(bridgeOv); startBreathe(); });
+  document.getElementById('actDone').addEventListener('click', function(){ leaveOverlay(actOv); finish(); });
+
+  function restart(){
+    doneOv.classList.add('leaving');
+    setTimeout(function(){
+      doneOv.hidden=true; doneOv.classList.remove('leaving');
+    },450);
+  }
+  document.getElementById('againBtn').addEventListener('click', function(){ restart(); setTimeout(startOrient, 500); });
+  document.getElementById('toMove').addEventListener('click', function(){ leaveOverlay(doneOv); goAct(); });
+
+})();
+</script>
+</body>
+</html>
