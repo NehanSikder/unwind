@@ -437,6 +437,10 @@
   var momentum=0;      // 0..1
   var streak=0;        // seconds continuously connected
   var connected=false;
+  var wasConnected=false;               // for lock-on rising edge
+  var lastLockT=-9999;                  // debounce lock-on fires
+  var lock={on:false, t:0};             // lock-on effect state
+  var LOCK_DUR=0.5;                     // half-second lock-on
   var flowLit=false;
   var breathCycle=0, BREATH_CYCLES=3;
   var actStart=0;
@@ -510,6 +514,7 @@
     setStage('pursue');
     CONNECT_R = connectRadius();
     dot.r = 14;
+    wasConnected=false; lastLockT=-9999; lock.on=false; lock.t=0;
     pickWaypoint();
     setHint('Follow the dot.');
     ptr.everMoved=false; ptr.lastMove=now();
@@ -538,6 +543,14 @@
     var d = dist(ptr.x,ptr.y,dot.x,dot.y);
     var usingEyes = !ptr.everMoved || (now()-ptr.lastMove>1400);
     connected = ptr.everMoved && ptr.active && d < CONNECT_R;
+
+    // lock-on: fire on the rising edge of connection (debounced against edge-jitter)
+    if(connected && !wasConnected && (now()-lastLockT > 350)){
+      lock.on=true; lock.t=0; lastLockT=now();
+      buzz(reduce?0:14);                     // slight haptic on mobile; no-ops on laptop
+    }
+    wasConnected = connected;
+    if(lock.on){ lock.t += dt; if(lock.t>=LOCK_DUR) lock.on=false; }
 
     var fill;
     if(connected){
@@ -707,6 +720,35 @@
 
     ctx.fillStyle=calm?'#EAFFFB':mix(colT);
     ctx.beginPath(); ctx.arc(dot.x,dot.y, dot.r,0,Math.PI*2); ctx.fill();
+
+    // lock-on: hybrid ring-snap + faint corner ticks + contact flash (0.5s)
+    if(STAGE==='pursue' && lock.on){
+      var lp   = clamp(lock.t/LOCK_DUR,0,1);
+      var ease = 1-Math.pow(1-lp,3);                 // easeOutCubic — snaps in, settles
+      var la   = 1-lp;                               // fade over its life
+      var lr   = lerp(CONNECT_R*0.85, dot.r+7, ease);// ring collapses onto the dot
+      // collapsing ring
+      ctx.strokeStyle = mixA(colT, 0.30 + 0.45*la);
+      ctx.lineWidth   = lerp(1.2, 2.4, ease);
+      ctx.beginPath(); ctx.arc(dot.x,dot.y, lr, 0, Math.PI*2); ctx.stroke();
+      // four faint corner ticks, snapping inward with the ring
+      var tickR = lr + 5, tlen = lerp(11, 5, ease);
+      ctx.strokeStyle = mixA(colT, 0.5*la);
+      ctx.lineWidth   = 1.5;
+      for(var c=0;c<4;c++){
+        var a0=Math.PI/4 + c*Math.PI/2;
+        ctx.beginPath();
+        ctx.moveTo(dot.x+Math.cos(a0)*tickR,        dot.y+Math.sin(a0)*tickR);
+        ctx.lineTo(dot.x+Math.cos(a0)*(tickR+tlen), dot.y+Math.sin(a0)*(tickR+tlen));
+        ctx.stroke();
+      }
+      // quick contact flash at the moment of lock
+      if(lp<0.35 && !reduce){
+        var f=1-(lp/0.35);
+        ctx.fillStyle='rgba(234,255,251,'+(f*0.16)+')';
+        ctx.beginPath(); ctx.arc(dot.x,dot.y, dot.r*1.7, 0, Math.PI*2); ctx.fill();
+      }
+    }
 
     // breathing ring
     if(STAGE==='breathe'){
